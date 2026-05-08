@@ -1,8 +1,8 @@
 {
-  "name": "LIFT Workout Tracker",
+  "name": "LIFT",
   "short_name": "LIFT",
-  "description": "A minimal progressive-overload workout tracker built from Week 21-22 notes.",
-  "start_url": ".",
+  "description": "Private workout tracker with progression and build-ups.",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#050505",
   "theme_color": "#050505",
