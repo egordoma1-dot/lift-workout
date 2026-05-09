@@ -1,4 +1,4 @@
-const APP_VERSION = 'v0.2 p.1';
+const APP_VERSION = 'v0.2 p.5';
 // Same key as p.4/p.5 so the Home Screen app keeps existing workout data after a GitHub Pages update.
 const STORAGE_KEY = 'lift.v0.1.p4.program';
 
@@ -7,12 +7,20 @@ const ui = {
   settingsExerciseId: null,
   backupOpen: false,
   backupText: '',
-  toast: ''
+  toast: '',
+  forceWorkout: false,
+  monthWeek: null
 };
 
 const seedProgram = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   currentMonthIndex: 1,
+  currentBlockIndex: 1,
+  currentWeekIndex: 1,
+  blockStartedOn: startOfWeekIso(new Date()),
+  deloadWeek: 8,
+  deloadAppliedForBlock: false,
+  preDeloadSessions: null,
   currentSessionIndex: 0,
   rebuildMode: false,
   history: [],
@@ -91,7 +99,19 @@ const seedProgram = {
   ]
 };
 
-let state = loadState();
+const WEEK_PLAN = [
+  { day: 'MON', kind: 'workout', sessionIndex: 0, title: 'UPPER A' },
+  { day: 'TUE', kind: 'workout', sessionIndex: 1, title: 'LOWER + CORE A' },
+  { day: 'WED', kind: 'rest', title: 'REST' },
+  { day: 'THU', kind: 'workout', sessionIndex: 2, title: 'UPPER B' },
+  { day: 'FRI', kind: 'workout', sessionIndex: 3, title: 'LOWER + CORE B' },
+  { day: 'SAT', kind: 'workout', sessionIndex: 4, title: 'ARM + SH' },
+  { day: 'SUN', kind: 'rest', title: 'REST' }
+];
+
+let state = syncCalendarState(loadState());
+if (!ui.monthWeek) ui.monthWeek = state.currentWeekIndex || 1;
+saveState();
 
 function lift(id, name, family, sets, repMin, repMax, weight, unit, increment, reps, targetRep, buildups = []) {
   const workRows = Array.from({ length: sets }, (_, i) => makeWorkRow(id, i + 1, weight, unit, reps[i] ?? targetRep ?? repMin));
@@ -123,8 +143,14 @@ function loadState() {
 function migrateState(input) {
   const base = clone(seedProgram);
   const next = input && typeof input === 'object' ? input : base;
-  next.schemaVersion = 2;
+  next.schemaVersion = 3;
   next.currentMonthIndex = Number.isFinite(Number(next.currentMonthIndex)) ? Number(next.currentMonthIndex) : 1;
+  next.currentBlockIndex = Number.isFinite(Number(next.currentBlockIndex)) ? Number(next.currentBlockIndex) : Number(next.currentMonthIndex || 1);
+  next.currentWeekIndex = clampInt(next.currentWeekIndex, 1, 8, 1);
+  next.blockStartedOn = next.blockStartedOn || startOfWeekIso(new Date());
+  next.deloadWeek = clampInt(next.deloadWeek, 1, 8, 8);
+  next.deloadAppliedForBlock = Boolean(next.deloadAppliedForBlock);
+  next.preDeloadSessions = next.preDeloadSessions || null;
   next.currentSessionIndex = clampInt(next.currentSessionIndex, 0, Math.max(0, (next.sessions || base.sessions).length - 1), 0);
   next.rebuildMode = Boolean(next.rebuildMode);
   next.history = Array.isArray(next.history) ? next.history : [];
@@ -182,10 +208,110 @@ function clampInt(value, min, max, fallback) {
 }
 function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
 function commit(next, toast = '') {
-  state = migrateState(next);
+  state = syncCalendarState(migrateState(next));
   ui.toast = toast;
   saveState();
   render();
+}
+
+function mondayWeekIndex(date = new Date()) { return (date.getDay() + 6) % 7; }
+function todayPlan(date = new Date()) { return WEEK_PLAN[mondayWeekIndex(date)] || WEEK_PLAN[0]; }
+function localIsoDate(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+function parseIsoDate(iso) {
+  const [y, m, d] = String(iso || '').split('-').map(Number);
+  return new Date(y || new Date().getFullYear(), (m || 1) - 1, d || 1);
+}
+function addDays(dateOrIso, days) {
+  const d = typeof dateOrIso === 'string' ? parseIsoDate(dateOrIso) : new Date(dateOrIso);
+  d.setDate(d.getDate() + Number(days || 0));
+  return d;
+}
+function startOfWeekIso(date = new Date()) {
+  const d = new Date(date);
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() - mondayWeekIndex(d));
+  return localIsoDate(d);
+}
+function daysBetween(startIso, endIso) {
+  const a = parseIsoDate(startIso); a.setHours(12,0,0,0);
+  const b = parseIsoDate(endIso); b.setHours(12,0,0,0);
+  return Math.round((b - a) / 86400000);
+}
+function programWeekForDate(nextState = state, date = new Date()) {
+  const start = startOfWeekIso(parseIsoDate(nextState.blockStartedOn || startOfWeekIso(date)));
+  const currentMonday = startOfWeekIso(date);
+  const raw = Math.floor(daysBetween(start, currentMonday) / 7) + 1;
+  return clampInt(raw, 1, 8, 1);
+}
+function sessionDateFor(weekIndex = state.currentWeekIndex, planOrIndex = todayPlan()) {
+  const dayIndex = typeof planOrIndex === 'number' ? planOrIndex : WEEK_PLAN.indexOf(planOrIndex);
+  return localIsoDate(addDays(state.blockStartedOn, (Number(weekIndex || 1) - 1) * 7 + Math.max(0, dayIndex)));
+}
+function displayDate(iso) {
+  try { return parseIsoDate(iso).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }); }
+  catch { return String(iso || ''); }
+}
+function currentWeekIsDeload(nextState = state) { return Number(nextState.currentWeekIndex || 1) === Number(nextState.deloadWeek || 8); }
+function syncCalendarState(nextState, date = new Date()) {
+  let next = migrateStateShallow(nextState);
+  const week = programWeekForDate(next, date);
+  const plan = todayPlan(date);
+  next = { ...next, currentWeekIndex: week, lastAutoDay: localIsoDate(date) };
+  if (plan.kind === 'workout' && !ui.forceWorkout) {
+    next.currentSessionIndex = clampInt(plan.sessionIndex, 0, Math.max(0, (next.sessions || []).length - 1), 0);
+  }
+  if (week === Number(next.deloadWeek || 8) && !next.deloadAppliedForBlock) {
+    next = {
+      ...next,
+      preDeloadSessions: clone(next.sessions || []),
+      sessions: (next.sessions || []).map(session => ({
+        ...session,
+        source: `Week ${week}/8 · deload`,
+        intensity: 'DELOAD',
+        exercises: (session.exercises || []).map(item => prepareForDeloadWeek(item))
+      })),
+      deloadAppliedForBlock: true
+    };
+  }
+  return next;
+}
+function migrateStateShallow(next) { return next && typeof next === 'object' ? next : clone(seedProgram); }
+function planForSessionIndex(sessionIndex) { return WEEK_PLAN.find(p => p.kind === 'workout' && p.sessionIndex === sessionIndex); }
+function nextScheduledWorkout(fromIndex = mondayWeekIndex()) {
+  for (let step = 1; step <= WEEK_PLAN.length; step += 1) {
+    const plan = WEEK_PLAN[(fromIndex + step) % WEEK_PLAN.length];
+    if (plan.kind === 'workout') return plan;
+  }
+  return WEEK_PLAN.find(p => p.kind === 'workout');
+}
+function weekStatusFor(index, weekIndex = state.currentWeekIndex) {
+  const currentWeek = Number(state.currentWeekIndex || 1);
+  if (Number(weekIndex) < currentWeek) return 'past';
+  if (Number(weekIndex) > currentWeek) return 'future';
+  const today = mondayWeekIndex();
+  if (index < today) return 'past';
+  if (index === today) return 'today';
+  return 'future';
+}
+function sessionDoneFor(plan, weekIndex = state.currentWeekIndex) {
+  if (!plan || plan.kind !== 'workout') return false;
+  const date = sessionDateFor(weekIndex, plan);
+  return (state.history || []).some(h => h.scope === 'session' && h.sessionDate === date && h.sessionIndex === plan.sessionIndex && h.type === 'session-done');
+}
+function statusLabel(plan, status, weekIndex = state.currentWeekIndex) {
+  if (status === 'today') return plan.kind === 'rest' ? 'REST!' : 'TODAY';
+  if (plan.kind === 'rest') return 'REST';
+  if (sessionDoneFor(plan, weekIndex)) return 'DONE';
+  if (status === 'past') return 'PASSED';
+  return status === 'future' ? 'FUTURE' : '';
+}
+function isTodayRestPage() {
+  return todayPlan().kind === 'rest' && !ui.forceWorkout;
 }
 
 function currentSession() { return state.sessions[state.currentSessionIndex] || state.sessions[0]; }
@@ -388,11 +514,56 @@ function completeLift(exerciseId) {
     lastCompletion: { eventId, before },
     historyLog: [compactExerciseEvent(event), ...(source.historyLog || [])].slice(0, 24)
   };
-  const sessions = state.sessions.map((s, i) => i === state.currentSessionIndex
-    ? { ...s, exercises: s.exercises.map(ex => ex.id === exerciseId ? after : ex) }
-    : s
-  );
-  commit({ ...state, sessions, history: [event, ...state.history].slice(0, 200) }, result.message);
+  const sessions = propagateCompletionToWeek(exerciseId, after, result.exercise);
+  const propagatedCount = countFutureMatchingExercises(exerciseId);
+  const message = propagatedCount > 0
+    ? `${result.message} Updated ${propagatedCount} later workout${propagatedCount === 1 ? '' : 's'} this week.`
+    : result.message;
+  commit({ ...state, sessions, history: [event, ...state.history].slice(0, 200) }, message);
+}
+
+function countFutureMatchingExercises(exerciseId) {
+  return state.sessions.slice(state.currentSessionIndex + 1).reduce((count, session) => {
+    return count + (session.exercises || []).filter(ex => ex.type === 'lift' && ex.id === exerciseId && !ex.done).length;
+  }, 0);
+}
+
+function propagateCompletionToWeek(exerciseId, completedExercise, progressionExercise) {
+  return state.sessions.map((session, sessionIndex) => {
+    if (sessionIndex < state.currentSessionIndex) return session;
+    const exercises = session.exercises.map(ex => {
+      if (ex.type !== 'lift' || ex.id !== exerciseId) return ex;
+      if (sessionIndex === state.currentSessionIndex) return completedExercise;
+      if (ex.done) return ex;
+      return applyWeekInnerProgression(ex, progressionExercise);
+    });
+    return { ...session, exercises };
+  });
+}
+
+function applyWeekInnerProgression(futureEx, progressionEx) {
+  const nextWeight = numberOr(progressionEx.weight, futureEx.weight, 0);
+  const nextTarget = clampInt(progressionEx.targetRep, futureEx.repMin, futureEx.repMax, futureEx.targetRep);
+  const nextBest = numberOr(progressionEx.bestRepAtWeight, futureEx.bestRepAtWeight, 0);
+  const buildups = buildupRows(futureEx).map(row => ({ ...row, complete: false }));
+  const existingWork = workRows(futureEx);
+  const workCount = Math.max(1, futureEx.sets || existingWork.length || 1);
+  const work = Array.from({ length: workCount }, (_, i) => ({
+    ...(existingWork[i] || makeWorkRow(futureEx.id, i + 1, nextWeight, futureEx.unit, nextTarget)),
+    label: `SET ${i + 1}`,
+    weight: nextWeight,
+    reps: nextTarget,
+    complete: false
+  }));
+  return {
+    ...futureEx,
+    weight: nextWeight,
+    targetRep: nextTarget,
+    bestRepAtWeight: nextBest,
+    done: false,
+    lastCompletion: null,
+    rows: [...buildups, ...work]
+  };
 }
 function compactExerciseEvent(event) {
   return {
@@ -451,9 +622,12 @@ function toastOnly(message) { ui.toast = message; render(); }
 function nextWorkout() {
   const session = currentSession();
   const last = state.currentSessionIndex >= state.sessions.length - 1;
+  const plan = planForSessionIndex(state.currentSessionIndex);
+  const sessionDate = sessionDateFor(state.currentWeekIndex, plan || todayPlan());
   const event = {
-    id: uid('session'), scope: 'session', monthIndex: state.currentMonthIndex,
-    type: 'session-done', label: `${session.title}: moved to next workout.`, at: new Date().toISOString()
+    id: uid('session'), scope: 'session', monthIndex: state.currentMonthIndex, blockIndex: state.currentBlockIndex, blockWeek: state.currentWeekIndex,
+    sessionIndex: state.currentSessionIndex, sessionDate,
+    type: 'session-done', label: `${session.title}: finished for ${displayDate(sessionDate)}.`, at: new Date().toISOString()
   };
   commit({
     ...state,
@@ -477,18 +651,55 @@ function clearCurrentSession() {
   }), 'session cleared');
 }
 function buildNextMonth() {
-  const nextMonth = Number(state.currentMonthIndex || 1) + 1;
-  const isDeloadMonth = nextMonth % 2 === 0;
-  const sessions = state.sessions.map(session => ({
+  const nextBlock = Number(state.currentBlockIndex || state.currentMonthIndex || 1) + 1;
+  const sourceSessions = state.preDeloadSessions && state.preDeloadSessions.length ? state.preDeloadSessions : state.sessions;
+  const nextStart = localIsoDate(addDays(state.blockStartedOn || startOfWeekIso(new Date()), 56));
+  const sessions = sourceSessions.map(session => ({
     ...session,
-    id: `${session.id.replace(/-m\d+$/, '')}-m${nextMonth}`,
-    source: isDeloadMonth ? `Month ${nextMonth} / deload block` : `Month ${nextMonth} / progression block`,
-    intensity: isDeloadMonth ? 'DELOAD' : (session.intensity === 'DELOAD' ? 'progression' : session.intensity),
-    exercises: session.exercises.map(item => prepareForNextBlock(item, isDeloadMonth))
+    id: `${session.id.replace(/-m\d+$/, '').replace(/-b\d+$/, '')}-b${nextBlock}`,
+    source: `Block ${nextBlock} · week 1/8`,
+    intensity: session.intensity === 'DELOAD' ? 'progression' : session.intensity,
+    exercises: session.exercises.map(item => prepareForNextBlock(item, false))
   }));
-  const event = { id: uid('month'), scope: 'month', monthIndex: nextMonth, type: 'month-built', label: isDeloadMonth ? `Month ${nextMonth}: deload generated.` : `Month ${nextMonth}: progression block generated.`, at: new Date().toISOString() };
-  commit({ ...state, currentMonthIndex: nextMonth, currentSessionIndex: 0, sessions, history: [event, ...state.history].slice(0, 200) }, event.label);
+  const event = { id: uid('block'), scope: 'month', monthIndex: nextBlock, blockIndex: nextBlock, type: 'block-built', label: `Block ${nextBlock}: new 8-week block started. Week 8 will be deload.`, at: new Date().toISOString() };
+  ui.monthWeek = 1;
+  commit({
+    ...state,
+    currentMonthIndex: nextBlock,
+    currentBlockIndex: nextBlock,
+    currentWeekIndex: 1,
+    blockStartedOn: nextStart,
+    currentSessionIndex: 0,
+    deloadAppliedForBlock: false,
+    preDeloadSessions: null,
+    sessions,
+    history: [event, ...state.history].slice(0, 200)
+  }, event.label);
 }
+
+function prepareForDeloadWeek(item) {
+  if (item.type !== 'lift') return { ...item, done: false, lastCompletion: null };
+  const deloadWeight = roundLoad(Number(item.weight || 0) * 0.85);
+  const deloadSets = Math.max(1, Math.ceil(Number(item.sets || 1) * 0.6));
+  const buildups = buildupRows(item).map(row => ({ ...row, complete: false }));
+  const work = workRows(item).slice(0, deloadSets).map((row, i) => ({
+    ...row,
+    id: uid(`${item.id}-deload-${i + 1}`),
+    weight: deloadWeight,
+    reps: Number(item.repMin || row.reps || 0),
+    complete: false
+  }));
+  return normalizeWorkRows({
+    ...item,
+    sets: deloadSets,
+    weight: deloadWeight,
+    targetRep: Number(item.repMin || item.targetRep || 0),
+    done: false,
+    lastCompletion: null,
+    rows: [...buildups, ...work]
+  });
+}
+
 function prepareForNextBlock(item, isDeloadMonth) {
   if (item.type !== 'lift') return { ...item, done: false, lastCompletion: null };
   if (!isDeloadMonth) return { ...item, done: false, lastCompletion: null, rows: item.rows.map(row => ({ ...row, complete: false })) };
@@ -552,7 +763,7 @@ function render() {
       <div class="version">${APP_VERSION}</div>
       <button class="top-action" data-action="toggle-screen">${ui.screen === 'month' ? 'WORKOUT' : 'MONTH'}</button>
     </div>
-    <main class="main">${ui.screen === 'month' ? monthScreen() : workoutScreen()}</main>
+    <main class="main">${ui.screen === 'month' ? monthScreen() : (isTodayRestPage() ? restScreen() : workoutScreen())}</main>
     ${backupDialog()}
     ${ui.toast ? `<div class="toast">${escapeHtml(ui.toast)}</div>` : ''}
   </div>`;
@@ -562,9 +773,14 @@ function render() {
 function workoutScreen() {
   const session = currentSession();
   const comp = completion(session);
+  const plan = planForSessionIndex(state.currentSessionIndex);
+  const sessionDate = sessionDateFor(state.currentWeekIndex, plan || todayPlan());
+  const autoCurrent = todayPlan().kind === 'workout' && todayPlan().sessionIndex === state.currentSessionIndex && !ui.forceWorkout;
+  const kicker = `${autoCurrent ? "Today's workout" : plan ? `${plan.day} workout` : 'Opened workout'} · Week ${state.currentWeekIndex}/8${currentWeekIsDeload() ? ' · Deload' : ''}`;
   return `<section class="hero">
-    <p class="kicker">Current workout</p>
+    <p class="kicker">${escapeHtml(kicker)}</p>
     <h1 class="title">${escapeHtml(session.title)}</h1>
+    <p class="session-date">${escapeHtml(displayDate(sessionDate))}</p>
     <p class="meta">${escapeHtml(session.intensity)} · ${escapeHtml(session.source)}</p>
     <p class="note">${escapeHtml(session.notes)}</p>
     <div class="progress-track"><div class="progress-fill" style="width:${comp.percent}%"></div></div>
@@ -573,12 +789,45 @@ function workoutScreen() {
       <label class="toggle-wrap"><span>Rebuild</span><input class="toggle" type="checkbox" data-action="toggle-rebuild" ${state.rebuildMode ? 'checked' : ''}></label>
     </div>
   </section>
-  <nav class="session-strip">${state.sessions.map((s, i) => `<button class="chip ${i === state.currentSessionIndex ? 'active' : ''}" data-action="goto-session" data-index="${i}">${escapeHtml(s.title)}</button>`).join('')}</nav>
+  ${weekStrip()}
   <section class="stack">${session.exercises.map(item => item.type === 'lift' ? liftCard(item) : simpleCard(item)).join('')}</section>
   <div class="bottom-grid">
-    <button class="big-button" data-action="next-workout">NEXT WORKOUT</button>
+    <button class="big-button" data-action="next-workout">FINISH DAY</button>
     <button class="big-button ghost" data-action="clear-session">CLEAR SESSION</button>
   </div>`;
+}
+function restScreen() {
+  const next = nextScheduledWorkout();
+  const restDate = sessionDateFor(state.currentWeekIndex, todayPlan());
+  return `<section class="hero rest-hero">
+    <p class="kicker">Week ${state.currentWeekIndex}/8 · ${currentWeekIsDeload() ? 'Deload' : 'Rest day'}</p>
+    <h1 class="title">REST!</h1>
+    <p class="session-date">${escapeHtml(displayDate(restDate))}</p>
+    <p class="meta">No main workout scheduled today.</p>
+    <p class="note">Open the next workout only if you are actually training today. Otherwise, leave the week clean and go touch grass like a suspiciously responsible person.</p>
+    <div class="hero-bottom"><span>Next: ${escapeHtml(next.day)} · ${escapeHtml(next.title)}</span><label class="toggle-wrap"><span>Rebuild</span><input class="toggle" type="checkbox" data-action="toggle-rebuild" ${state.rebuildMode ? 'checked' : ''}></label></div>
+  </section>
+  ${weekStrip()}
+  <div class="bottom-grid">
+    <button class="big-button" data-action="open-next-scheduled">OPEN NEXT WORKOUT</button>
+    <button class="big-button ghost" data-action="toggle-screen">MONTH</button>
+  </div>`;
+}
+function weekStrip() {
+  return `<div class="week-wrap"><div class="week-head"><span>Week ${state.currentWeekIndex}/8</span><span>${currentWeekIsDeload() ? 'DELOAD WEEK' : 'TRAINING WEEK'}</span></div><nav class="week-strip" aria-label="Workout week">${WEEK_PLAN.map((plan, i) => {
+    const status = weekStatusFor(i, state.currentWeekIndex);
+    const active = (plan.kind === 'rest' && status === 'today' && !ui.forceWorkout) || (plan.kind === 'workout' && plan.sessionIndex === state.currentSessionIndex && (ui.forceWorkout || status === 'today'));
+    const action = plan.kind === 'workout' ? `data-action="goto-session" data-index="${plan.sessionIndex}"` : `data-action="goto-rest"`;
+    const date = sessionDateFor(state.currentWeekIndex, plan);
+    return `<button class="day-chip ${status} ${plan.kind} ${active ? 'active' : ''}" ${action}>
+      <span class="day-name">${escapeHtml(plan.day)} · ${escapeHtml(shortDayDate(date))}</span>
+      <span class="day-title">${escapeHtml(plan.title)}</span>
+      <span class="day-state">${escapeHtml(statusLabel(plan, status, state.currentWeekIndex))}</span>
+    </button>`;
+  }).join('')}</nav></div>`;
+}
+function shortDayDate(iso) {
+  try { return parseIsoDate(iso).toLocaleDateString([], { month: 'short', day: 'numeric' }); } catch { return iso; }
 }
 function liftCard(item) {
   const open = ui.settingsExerciseId === item.id;
@@ -610,14 +859,20 @@ function nextPreview(item) {
 }
 function rowTemplate(item, row) {
   const canDelete = row.kind === 'buildup' || workRows(item).length > 1;
-  return `<div class="row ${row.kind === 'buildup' ? 'buildup' : 'work'}">
-    <div class="row-top">
-      <div class="row-label">${escapeHtml(row.label || row.kind)}</div>
-      ${canDelete ? `<button class="row-delete" data-action="delete-row" data-exercise-id="${item.id}" data-row-id="${row.id}" aria-label="Delete row">×</button>` : ''}
-    </div>
-    <div class="row-fields">
-      <label class="input-shell"><span class="field-caption">weight</span><input aria-label="Weight" inputmode="decimal" value="${escapeHtml(row.weight)}" data-action="update-row" data-exercise-id="${item.id}" data-row-id="${row.id}" data-field="weight" /><span class="unit">${escapeHtml(row.unit || item.unit)}</span></label>
-      <label class="input-shell"><span class="field-caption">reps</span><input aria-label="Reps" inputmode="numeric" pattern="[0-9]*" value="${escapeHtml(row.reps)}" data-action="update-row" data-exercise-id="${item.id}" data-row-id="${row.id}" data-field="reps" /></label>
+  const deleteButton = canDelete
+    ? `<button class="swipe-delete" data-action="delete-row" data-exercise-id="${item.id}" data-row-id="${row.id}" aria-label="Delete row">DELETE</button>`
+    : '';
+  return `<div class="swipe-row ${canDelete ? 'can-delete' : 'locked'}" data-row-id="${row.id}" data-exercise-id="${item.id}">
+    ${deleteButton}
+    <div class="row ${row.kind === 'buildup' ? 'buildup' : 'work'} swipe-track">
+      <div class="row-top">
+        <div class="row-label">${escapeHtml(row.label || row.kind)}</div>
+        <div class="row-hint">${canDelete ? 'swipe left' : 'locked'}</div>
+      </div>
+      <div class="row-fields">
+        <label class="input-shell"><span class="field-caption">weight</span><input aria-label="Weight" inputmode="decimal" value="${escapeHtml(row.weight)}" data-action="update-row" data-exercise-id="${item.id}" data-row-id="${row.id}" data-field="weight" /><span class="unit">${escapeHtml(row.unit || item.unit)}</span></label>
+        <label class="input-shell"><span class="field-caption">reps</span><input aria-label="Reps" inputmode="numeric" pattern="[0-9]*" value="${escapeHtml(row.reps)}" data-action="update-row" data-exercise-id="${item.id}" data-row-id="${row.id}" data-field="reps" /></label>
+      </div>
     </div>
   </div>`;
 }
@@ -663,24 +918,44 @@ function simpleCard(item) {
 }
 function monthScreen() {
   const r = deriveMonthResults();
-  const nextIsDeload = (Number(state.currentMonthIndex || 1) + 1) % 2 === 0;
-  return `<section class="hero">
-    <p class="kicker">Month ${state.currentMonthIndex}</p>
-    <h1 class="title">RESULTS</h1>
-    <p class="note">Month view is the rebuild table: what moved, what held, and why. Next generated block: ${nextIsDeload ? 'DELOAD' : 'PROGRESSION'}.</p>
+  const selectedWeek = clampInt(ui.monthWeek || state.currentWeekIndex || 1, 1, 8, 1);
+  const isSelectedDeload = selectedWeek === Number(state.deloadWeek || 8);
+  return `<section class="hero month-hero">
+    <p class="kicker">Block ${state.currentBlockIndex || state.currentMonthIndex} · 8-week month</p>
+    <h1 class="title">WEEKS</h1>
+    <p class="note">Week ${selectedWeek}/8${isSelectedDeload ? ' is deload' : ''}. Pick a week and check sessions by date without opening a rebuild goblin cave.</p>
   </section>
-  <section class="month-grid">
-    ${stat(r.sessionEvents.length, 'sessions')}${stat(r.events.length, 'exercises')}${stat(r.progressed.length, 'progressed')}${stat(r.misses.length, 'misses held')}${stat(r.held.length, 'held')}${stat(r.buildups, 'build-ups')}
+  ${weekTabs(selectedWeek)}
+  ${weekSessionList(selectedWeek)}
+  <section class="month-grid compact">
+    ${stat(r.sessionEvents.length, 'finished days')}${stat(r.progressed.length, 'progressed')}${stat(r.misses.length, 'misses held')}${stat(r.buildups, 'build-ups')}
   </section>
-  <div class="month-actions">
-    <button class="action primary" data-action="build-next-month">BUILD NEXT MONTH</button>
+  <div class="month-actions compact-actions">
     <button class="action" data-action="open-backup">BACKUP</button>
     <button class="action quiet" data-action="import-backup-open">IMPORT</button>
-    <button class="action quiet danger" data-action="reset">RESET</button>
+    <button class="action primary" data-action="build-next-month">NEXT 8-WEEK BLOCK</button>
   </div>
-  ${monthList('Progressed', r.progressed)}
-  ${monthList('Missed but held', r.misses)}
-  <section class="history"><div class="history-title">Recent moves</div>${state.history.length ? state.history.slice(0, 30).map(historyItem).join('') : '<div class="history-item">No history yet.</div>'}</section>`;
+  <section class="history"><div class="history-title">Recent moves</div>${state.history.length ? state.history.slice(0, 18).map(historyItem).join('') : '<div class="history-item">No history yet.</div>'}</section>`;
+}
+function weekTabs(selectedWeek) {
+  return `<nav class="week-tabs" aria-label="Block weeks">${Array.from({ length: 8 }, (_, i) => i + 1).map(week => {
+    const klass = week === selectedWeek ? 'active' : week === Number(state.deloadWeek || 8) ? 'deload-tab' : '';
+    return `<button class="week-tab ${klass}" data-action="select-week" data-week="${week}">W${week}<span>${week === Number(state.deloadWeek || 8) ? 'DELOAD' : week === Number(state.currentWeekIndex || 1) ? 'NOW' : ''}</span></button>`;
+  }).join('')}</nav>`;
+}
+function weekSessionList(weekIndex) {
+  return `<section class="week-session-list">${WEEK_PLAN.map((plan, i) => {
+    const date = sessionDateFor(weekIndex, plan);
+    const status = weekStatusFor(i, weekIndex);
+    const done = sessionDoneFor(plan, weekIndex);
+    const session = plan.kind === 'workout' ? state.sessions[plan.sessionIndex] : null;
+    const comp = session ? completion(session) : null;
+    const badge = plan.kind === 'rest' ? 'REST' : done ? 'DONE' : status === 'today' ? 'TODAY' : status === 'past' ? 'PASSED' : 'FUTURE';
+    return `<button class="session-row-card ${status} ${done ? 'done' : ''} ${plan.kind}" ${plan.kind === 'workout' ? `data-action="goto-session" data-index="${plan.sessionIndex}"` : 'data-action="goto-rest"'}>
+      <div><div class="session-row-date">${escapeHtml(displayDate(date))}</div><div class="session-row-title">${escapeHtml(plan.title)}</div></div>
+      <div class="session-row-side"><span>${escapeHtml(badge)}</span>${comp ? `<small>${comp.done}/${comp.total}</small>` : '<small>off</small>'}</div>
+    </button>`;
+  }).join('')}</section>`;
 }
 function stat(value, label) { return `<div class="stat"><div class="stat-value">${escapeHtml(value)}</div><div class="stat-label">${escapeHtml(label)}</div></div>`; }
 function monthList(title, events) {
@@ -708,21 +983,97 @@ function bindEvents() {
     }
     el.addEventListener('click', ev => { ev.preventDefault(); handleAction(el); });
   });
+  bindSwipeRows();
+}
+
+function bindSwipeRows() {
+  const rows = Array.from(document.querySelectorAll('.swipe-row.can-delete'));
+  rows.forEach(row => {
+    let startX = 0;
+    let startY = 0;
+    let lastX = 0;
+    let dragging = false;
+    let horizontal = false;
+    const track = row.querySelector('.swipe-track');
+    if (!track) return;
+
+    const close = () => {
+      row.classList.remove('open', 'dragging');
+      track.style.transform = '';
+    };
+    const open = () => {
+      closeSwipeRows(row);
+      row.classList.add('open');
+      track.style.transform = 'translateX(-94px)';
+    };
+
+    row.addEventListener('pointerdown', ev => {
+      if (ev.target.closest('input, textarea, button, label, .input-shell')) return;
+      startX = ev.clientX;
+      startY = ev.clientY;
+      lastX = startX;
+      dragging = true;
+      horizontal = false;
+      row.classList.add('dragging');
+      try { row.setPointerCapture(ev.pointerId); } catch {}
+    });
+
+    row.addEventListener('pointermove', ev => {
+      if (!dragging) return;
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      lastX = ev.clientX;
+      if (!horizontal && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.25) horizontal = true;
+      if (!horizontal) return;
+      ev.preventDefault();
+      closeSwipeRows(row);
+      const base = row.classList.contains('open') ? -94 : 0;
+      const offset = Math.min(0, Math.max(-110, base + dx));
+      track.style.transform = `translateX(${offset}px)`;
+    });
+
+    const finish = () => {
+      if (!dragging) return;
+      const dx = lastX - startX;
+      dragging = false;
+      row.classList.remove('dragging');
+      if (!horizontal) return;
+      if (dx < -46) open(); else close();
+    };
+    row.addEventListener('pointerup', finish);
+    row.addEventListener('pointercancel', finish);
+  });
+
+  document.addEventListener('click', ev => {
+    if (!ev.target.closest('.swipe-row')) closeSwipeRows();
+  }, { once: true });
+}
+
+function closeSwipeRows(except = null) {
+  document.querySelectorAll('.swipe-row.open, .swipe-row.dragging').forEach(row => {
+    if (row === except) return;
+    row.classList.remove('open', 'dragging');
+    const track = row.querySelector('.swipe-track');
+    if (track) track.style.transform = '';
+  });
 }
 function handleAction(el) {
   const action = el.dataset.action;
-  if (action === 'workout') { ui.screen = 'workout'; render(); }
-  if (action === 'toggle-screen') { ui.screen = ui.screen === 'month' ? 'workout' : 'month'; render(); }
+  if (action === 'workout') { ui.screen = 'workout'; ui.forceWorkout = false; render(); }
+  if (action === 'toggle-screen') { ui.screen = ui.screen === 'month' ? 'workout' : 'month'; if (ui.screen === 'month') ui.monthWeek = state.currentWeekIndex || 1; render(); }
   if (action === 'toggle-rebuild') { commit({ ...state, rebuildMode: !state.rebuildMode }); }
-  if (action === 'goto-session') { ui.settingsExerciseId = null; commit({ ...state, currentSessionIndex: Number(el.dataset.index) }); }
+  if (action === 'goto-session') { ui.settingsExerciseId = null; ui.forceWorkout = true; ui.screen = 'workout'; commit({ ...state, currentSessionIndex: Number(el.dataset.index) }); }
   if (action === 'add-buildup') addBuildupRow(el.dataset.exerciseId);
   if (action === 'add-work-set') addWorkSetRow(el.dataset.exerciseId);
-  if (action === 'delete-row') deleteRow(el.dataset.exerciseId, el.dataset.rowId);
+  if (action === 'delete-row') { closeSwipeRows(); deleteRow(el.dataset.exerciseId, el.dataset.rowId); }
   if (action === 'toggle-settings') { ui.settingsExerciseId = ui.settingsExerciseId === el.dataset.exerciseId ? null : el.dataset.exerciseId; render(); }
   if (action === 'complete-lift') completeLift(el.dataset.exerciseId);
   if (action === 'complete-simple') completeSimple(el.dataset.exerciseId);
   if (action === 'next-workout') nextWorkout();
+  if (action === 'open-next-scheduled') { const next = nextScheduledWorkout(); ui.forceWorkout = true; commit({ ...state, currentSessionIndex: next.sessionIndex }, `opened ${next.title}`); }
+  if (action === 'goto-rest') { ui.forceWorkout = false; ui.screen = 'workout'; render(); }
   if (action === 'clear-session') clearCurrentSession();
+  if (action === 'select-week') { ui.monthWeek = Number(el.dataset.week); render(); }
   if (action === 'build-next-month') buildNextMonth();
   if (action === 'open-backup') openBackup('export');
   if (action === 'import-backup-open') openBackup('import');

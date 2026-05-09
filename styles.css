@@ -95,6 +95,83 @@ input, textarea { -webkit-tap-highlight-color: transparent; }
 }
 .meta { color: var(--muted); font-size: 14px; line-height: 1.35; margin: 12px 0 0; }
 .note { color: #c8c8c1; font-size: 15px; line-height: 1.35; margin: 10px 0 0; }
+
+.session-date {
+  margin: 10px 0 0;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: -.04em;
+  text-transform: uppercase;
+}
+.week-wrap { margin-top: 14px; }
+.week-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--quiet);
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  padding: 0 4px 8px;
+}
+.week-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+.week-tab {
+  min-height: 54px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: #0b0b0b;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 950;
+  letter-spacing: -.04em;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+}
+.week-tab span {
+  min-height: 10px;
+  color: var(--quiet);
+  font-size: 8px;
+  font-weight: 950;
+  letter-spacing: .12em;
+}
+.week-tab.active { background: var(--text); color: #050505; border-color: var(--text); }
+.week-tab.active span { color: #050505; }
+.week-tab.deload-tab:not(.active) { border-style: dashed; }
+.week-session-list { display: grid; gap: 8px; margin-top: 12px; }
+.session-row-card {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  text-align: left;
+}
+.session-row-card.past { opacity: .62; }
+.session-row-card.today { border-color: var(--text); }
+.session-row-card.rest { border-style: dashed; }
+.session-row-date { color: var(--muted); font-size: 12px; font-weight: 850; }
+.session-row-title { margin-top: 2px; font-size: 18px; line-height: .95; font-weight: 950; letter-spacing: -.055em; text-transform: uppercase; }
+.session-row-side { display: grid; justify-items: end; gap: 3px; color: var(--quiet); font-size: 10px; font-weight: 950; letter-spacing: .1em; text-transform: uppercase; }
+.session-row-side small { color: var(--muted); font-size: 11px; letter-spacing: 0; text-transform: none; }
+.month-grid.compact { grid-template-columns: repeat(4, minmax(0,1fr)); }
+.month-grid.compact .stat { padding: 13px; border-radius: 18px; }
+.month-grid.compact .stat-value { font-size: 30px; }
+.compact-actions { grid-template-columns: 1fr 1fr; }
+.compact-actions .action.primary { grid-column: 1 / -1; }
+
 .progress-track {
   margin: 18px 0 12px;
   height: 8px;
@@ -128,6 +205,64 @@ input, textarea { -webkit-tap-highlight-color: transparent; }
   letter-spacing: -.02em;
 }
 .chip.active { background: var(--text); color: #050505; border-color: var(--text); }
+
+.rest-hero { background: linear-gradient(180deg, #131313 0%, #090909 100%); }
+.week-strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(104px, 1fr);
+  overflow-x: auto;
+  gap: 8px;
+  padding: 14px 0 2px;
+  scrollbar-width: none;
+}
+.week-strip::-webkit-scrollbar { display: none; }
+.day-chip {
+  min-height: 76px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #0b0b0b;
+  color: var(--muted);
+  padding: 10px;
+  display: grid;
+  align-content: space-between;
+  text-align: left;
+}
+.day-name {
+  color: var(--quiet);
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: .16em;
+}
+.day-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 920;
+  letter-spacing: -.04em;
+  text-transform: uppercase;
+  line-height: 1.02;
+}
+.day-state {
+  color: var(--quiet);
+  font-size: 9px;
+  font-weight: 950;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.day-chip.past { opacity: .54; }
+.day-chip.future { background: #080808; }
+.day-chip.today { border-color: var(--text); }
+.day-chip.active {
+  background: var(--text);
+  color: #050505;
+  border-color: var(--text);
+}
+.day-chip.active .day-name,
+.day-chip.active .day-title,
+.day-chip.active .day-state { color: #050505; }
+.day-chip.rest { border-style: dashed; }
+.day-chip.rest .day-title { color: var(--muted); }
+.day-chip.rest.active .day-title { color: #050505; }
 .stack { display: grid; gap: 12px; margin-top: 14px; }
 .card {
   border: 1px solid var(--line);
@@ -159,10 +294,42 @@ input, textarea { -webkit-tap-highlight-color: transparent; }
 .row-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .row-label { color: var(--muted); font-size: 12px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
 .row.buildup .row-label { color: var(--quiet); }
-.row-delete {
-  width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line); background: #070707; color: var(--muted);
-  font-size: 19px; line-height: 1; font-weight: 800;
+.swipe-row {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  touch-action: pan-y;
 }
+.swipe-row.dragging { touch-action: none; }
+.swipe-track {
+  position: relative;
+  z-index: 2;
+  transition: transform .18s ease;
+  will-change: transform;
+}
+.swipe-row.dragging .swipe-track { transition: none; }
+.swipe-delete {
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: 1;
+  width: 88px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: #3a0d0a;
+  color: #ffb6aa;
+  font-size: 11px;
+  font-weight: 950;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.row-hint {
+  color: var(--quiet);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.swipe-row.open .row-hint { color: var(--bad); }
 .row-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
 .input-shell {
   position: relative;
@@ -308,4 +475,10 @@ input, textarea { -webkit-tap-highlight-color: transparent; }
 }
 @media (max-width: 340px) {
   .row-fields, .bottom-grid, .month-actions, .settings-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 420px) {
+  .month-grid.compact { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .week-tabs { grid-template-columns: repeat(4, minmax(0,1fr)); }
+  .week-tab { min-height: 48px; font-size: 15px; }
 }
