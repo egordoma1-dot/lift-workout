@@ -11,7 +11,7 @@
     }
   } catch {}
 })();
-const APP_VERSION = 'v0.2 p.36';
+const APP_VERSION = 'v0.2 p.32.2';
 // Same key as p.4/p.5 so the Home Screen app keeps existing workout data after a GitHub Pages update.
 const STORAGE_KEY = 'lift.v0.1.p4.program';
 const PROGRAM_START_WEEK = '2025-12-08';
@@ -43,22 +43,6 @@ const ui = {
   updateBusy: false,
   updateDrag: false
 };
-
-let toastTimer = null;
-function setToast(message = '', duration = 2000) {
-  if (toastTimer) {
-    clearTimeout(toastTimer);
-    toastTimer = null;
-  }
-  ui.toast = message || '';
-  if (ui.toast && duration > 0) {
-    toastTimer = setTimeout(() => {
-      ui.toast = '';
-      toastTimer = null;
-      render();
-    }, duration);
-  }
-}
 
 const seedProgram = {
   schemaVersion: 5,
@@ -285,7 +269,7 @@ function clampInt(value, min, max, fallback) {
 function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
 function commit(next, toast = '') {
   state = syncCalendarState(migrateState(next));
-  setToast(toast);
+  ui.toast = toast;
   saveState();
   render();
 }
@@ -802,7 +786,7 @@ function completeSimple(exerciseId) {
 function findExercise(exerciseId) {
   return currentSession()?.exercises?.find(ex => ex.id === exerciseId);
 }
-function toastOnly(message) { setToast(message); render(); }
+function toastOnly(message) { ui.toast = message; render(); }
 
 function nextWorkout() {
   const sessionDate = activeDateIso();
@@ -1584,10 +1568,10 @@ function simpleCard(item) {
         <div class="simple-prescription">${escapeHtml(simplePrescription(item))}</div>
         <div>${escapeHtml(item.intensity || '')}</div>
       </div>
+      <button class="action primary" data-action="complete-simple" data-exercise-id="${item.id}">${item.done ? 'REOPEN' : 'DONE'}</button>
     </div>
     <div class="card-actions simple-actions">
       <button class="action" data-action="toggle-settings" data-exercise-id="${item.id}">${open ? 'CLOSE' : 'SETTINGS'}</button>
-      <button class="action primary" data-action="complete-simple" data-exercise-id="${item.id}">${item.done ? 'REOPEN' : 'READY'}</button>
     </div>
     ${open ? simpleSettingsPanel(item) : ''}
   </article>`;
@@ -2136,7 +2120,9 @@ function handleAction(el) {
   if (action === 'reset') resetProgram();
 }
 
-// Recovery build: no service-worker registration.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+}
 function renderCrash(error) {
   const node = document.getElementById('app');
   const message = escapeHtml(error && (error.stack || error.message) ? (error.stack || error.message) : String(error || 'Unknown error'));
