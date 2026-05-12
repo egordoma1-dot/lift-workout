@@ -11,7 +11,7 @@
     }
   } catch {}
 })();
-const APP_VERSION = 'v0.2 p.36';
+const APP_VERSION = 'v0.2 p.41';
 // Same key as p.4/p.5 so the Home Screen app keeps existing workout data after a GitHub Pages update.
 const STORAGE_KEY = 'lift.v0.1.p4.program';
 const PROGRAM_START_WEEK = '2025-12-08';
@@ -521,6 +521,31 @@ function saveExerciseNote(exerciseId, raw) {
 }
 function updateExercise(exerciseId, updater, toast = '') {
   updateCurrentSession(session => ({ ...session, exercises: session.exercises.map(ex => ex.id === exerciseId ? updater(ex) : ex) }), toast);
+}
+function completeExerciseGesture(exerciseId) {
+  const ex = findExercise(exerciseId);
+  if (!ex) return;
+  if (ex.type === 'lift') completeLift(exerciseId);
+  else completeSimple(exerciseId);
+}
+function toggleExerciseSettingsGesture(exerciseId) {
+  ui.settingsExerciseId = ui.settingsExerciseId === exerciseId ? null : exerciseId;
+  render();
+}
+function reorderExerciseGesture(exerciseId, toIndex) {
+  const session = currentSession();
+  const exercises = session?.exercises || [];
+  const fromIndex = exercises.findIndex(ex => ex.id === exerciseId);
+  if (fromIndex < 0) return;
+  const maxIndex = Math.max(0, exercises.length - 1);
+  const targetIndex = Math.max(0, Math.min(maxIndex, Number(toIndex)));
+  if (targetIndex === fromIndex) return render();
+  updateCurrentSession(s => {
+    const nextExercises = [...s.exercises];
+    const [moved] = nextExercises.splice(fromIndex, 1);
+    nextExercises.splice(targetIndex, 0, moved);
+    return { ...s, exercises: nextExercises };
+  }, '');
 }
 function updateRow(exerciseId, rowId, field, value) {
   updateExercise(exerciseId, ex => ({ ...ex, done: false, rows: ex.rows.map(row => row.id === rowId ? { ...row, [field]: cleanNumber(value) } : row) }));
@@ -1302,7 +1327,7 @@ function render() {
   const main = ui.screen === 'month' ? monthScreen() : (isActiveDateNoDataPage() ? noDataScreen() : (isActiveDateRestPage() ? restScreen() : workoutScreen()));
   app.innerHTML = `<div class="app">
     <div class="topbar">
-      <button class="logo" data-action="workout">LIFT</button>
+      <button class="logo" data-action="open-global-settings">LIFT</button>
       <div class="version">${APP_VERSION}</div>
       <button class="top-action" data-action="toggle-screen">${ui.screen === 'month' ? 'WORKOUT' : 'MONTH'}</button>
     </div>
@@ -1482,10 +1507,6 @@ function liftCard(item) {
         : (noteValue ? `<div class="tiny-note">${escapeHtml(noteValue)}</div>` : '')}
     </header>
     <div class="rows">${item.rows.map(row => rowTemplate(item, row)).join('')}</div>
-    <div class="card-actions simple-actions">
-      <button class="action" data-action="toggle-settings" data-exercise-id="${item.id}">${open ? 'CLOSE' : 'SETTINGS'}</button>
-      <button class="action primary" data-action="complete-lift" data-exercise-id="${item.id}">${item.done ? 'REOPEN' : 'READY'}</button>
-    </div>
     ${open ? settingsPanel(item) : ''}
     ${item.done && item.draftCompletion ? `<div class="draft-panel"><strong>Pending:</strong> ${escapeHtml(item.draftCompletion.label)} <span>Commits on Finish Day.</span></div>` : ''}
     ${state.rebuildMode ? rebuildPanel(item, preview) : ''}
@@ -1585,10 +1606,6 @@ function simpleCard(item) {
         <div>${escapeHtml(item.intensity || '')}</div>
       </div>
     </div>
-    <div class="card-actions simple-actions">
-      <button class="action" data-action="toggle-settings" data-exercise-id="${item.id}">${open ? 'CLOSE' : 'SETTINGS'}</button>
-      <button class="action primary" data-action="complete-simple" data-exercise-id="${item.id}">${item.done ? 'REOPEN' : 'READY'}</button>
-    </div>
     ${open ? simpleSettingsPanel(item) : ''}
   </article>`;
 }
@@ -1640,12 +1657,7 @@ function replayExerciseCard(ex) {
 }
 
 function monthScreen() {
-  return `<section class="hero month-hero">
-    <button class="icon-plain month-settings-button" data-action="open-global-settings" aria-label="Global settings" title="Global settings">⚙</button>
-    <h1 class="title">MONTH</h1>
-  </section>
-  ${calendarGrid()}
-  ${calendarQuickMenu()}`;
+  return `${calendarGrid()}${calendarQuickMenu()}`;
 }
 function calendarGrid() {
   const month = ui.calendarMonth || localIsoDate(new Date()).slice(0,7);
@@ -2004,6 +2016,7 @@ function bindEvents() {
     el.addEventListener('click', ev => { ev.preventDefault(); handleAction(el); });
   });
   bindSwipeRows();
+  bindExerciseGestures();
   const noteEditor = document.querySelector('[data-role="session-note-editor"], [data-role="exercise-note-editor"]');
   if (noteEditor) {
     setTimeout(() => {
@@ -2020,7 +2033,7 @@ function bindSwipeRows() {
     let startY = 0;
     let lastX = 0;
     let dragging = false;
-    let horizontal = false;
+    let mode = null;
     const track = row.querySelector('.swipe-track');
     if (!track) return;
 
@@ -2040,40 +2053,191 @@ function bindSwipeRows() {
       startY = ev.clientY;
       lastX = startX;
       dragging = true;
-      horizontal = false;
-      row.classList.add('dragging');
-      try { row.setPointerCapture(ev.pointerId); } catch {}
-    });
+      mode = null;
+    }, { passive: true });
 
     row.addEventListener('pointermove', ev => {
       if (!dragging) return;
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
+      const ax = Math.abs(dx);
+      const ay = Math.abs(dy);
       lastX = ev.clientX;
-      if (!horizontal && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.25) horizontal = true;
-      if (!horizontal) return;
+
+      if (!mode) {
+        if (ay > 10 && ay > ax * 0.9) {
+          mode = 'scroll';
+          dragging = false;
+          row.classList.remove('dragging');
+          if (row.classList.contains('open')) close();
+          return;
+        }
+        const wantsOpen = dx < -16 && ax > ay * 1.9;
+        const wantsClose = row.classList.contains('open') && dx > 14 && ax > ay * 1.45;
+        if (wantsOpen || wantsClose) {
+          mode = 'swipe';
+          row.classList.add('dragging');
+          try { row.setPointerCapture(ev.pointerId); } catch {}
+        } else {
+          return;
+        }
+      }
+      if (mode !== 'swipe') return;
       ev.preventDefault();
-      closeSwipeRows(row);
+      if (!row.classList.contains('open')) closeSwipeRows(row);
       const base = row.classList.contains('open') ? -94 : 0;
       const offset = Math.min(0, Math.max(-110, base + dx));
       track.style.transform = `translateX(${offset}px)`;
-    });
+    }, { passive: false });
 
     const finish = () => {
-      if (!dragging) return;
+      if (!dragging && mode !== 'swipe') return;
       const dx = lastX - startX;
       dragging = false;
       row.classList.remove('dragging');
-      if (!horizontal) return;
-      if (dx < -46) open(); else close();
+      if (mode !== 'swipe') return;
+      if (row.classList.contains('open')) {
+        if (dx > 24) close();
+        else open();
+      } else {
+        if (dx < -58) open();
+        else close();
+      }
+      mode = null;
     };
     row.addEventListener('pointerup', finish);
     row.addEventListener('pointercancel', finish);
   });
 
-  document.addEventListener('click', ev => {
-    if (!ev.target.closest('.swipe-row')) closeSwipeRows();
-  }, { once: true });
+  document.addEventListener('pointerdown', ev => {
+    if (!ev.target.closest('.swipe-row.open')) closeSwipeRows();
+  }, { passive: true });
+  document.addEventListener('scroll', () => closeSwipeRows(), { passive: true, capture: true });
+}
+
+function bindExerciseGestures() {
+  const cards = Array.from(document.querySelectorAll('.stack > .card[data-exercise-id]'));
+  cards.forEach(card => {
+    let startX = 0;
+    let startY = 0;
+    let lastX = 0;
+    let lastY = 0;
+    let mode = null;
+    let down = false;
+    let longTimer = null;
+    let targetIndex = null;
+    const exerciseId = card.dataset.exerciseId;
+
+    const clearLong = () => {
+      if (longTimer) {
+        clearTimeout(longTimer);
+        longTimer = null;
+      }
+    };
+    const resetCard = () => {
+      card.classList.remove('card-swiping', 'drag-reorder');
+      card.style.transform = '';
+      card.style.opacity = '';
+      document.querySelectorAll('.card.reorder-target').forEach(el => el.classList.remove('reorder-target'));
+    };
+    const indexForY = y => {
+      const all = Array.from(document.querySelectorAll('.stack > .card[data-exercise-id]'));
+      let index = 0;
+      all.forEach(el => {
+        if (el === card) return;
+        const rect = el.getBoundingClientRect();
+        if (y > rect.top + rect.height / 2) index += 1;
+      });
+      return Math.max(0, Math.min(all.length - 1, index));
+    };
+
+    card.addEventListener('pointerdown', ev => {
+      if (ev.target.closest('input, textarea, button, select, label, .settings-panel, .swipe-row, .exercise-note-pen')) return;
+      startX = lastX = ev.clientX;
+      startY = lastY = ev.clientY;
+      mode = null;
+      down = true;
+      targetIndex = null;
+      clearLong();
+      longTimer = setTimeout(() => {
+        if (!down || mode) return;
+        mode = 'reorder';
+        card.classList.add('drag-reorder');
+        try { card.setPointerCapture(ev.pointerId); } catch {}
+        if (navigator.vibrate) navigator.vibrate(8);
+      }, 430);
+    }, { passive: true });
+
+    card.addEventListener('pointermove', ev => {
+      if (!down) return;
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      const ax = Math.abs(dx);
+      const ay = Math.abs(dy);
+      lastX = ev.clientX;
+      lastY = ev.clientY;
+
+      if (mode === 'reorder') {
+        ev.preventDefault();
+        targetIndex = indexForY(ev.clientY);
+        card.style.transform = `translateY(${dy}px) scale(.985)`;
+        card.style.opacity = '.86';
+        return;
+      }
+
+      if (ax > 8 || ay > 8) clearLong();
+
+      if (!mode) {
+        if (ay > 12 && ay > ax * 1.15) {
+          mode = 'scroll';
+          down = false;
+          clearLong();
+          return;
+        }
+        if (ax > 24 && ax > ay * 1.75) {
+          mode = 'swipe';
+          card.classList.add('card-swiping');
+          try { card.setPointerCapture(ev.pointerId); } catch {}
+        } else {
+          return;
+        }
+      }
+
+      if (mode === 'swipe') {
+        ev.preventDefault();
+        const offset = Math.max(-82, Math.min(82, dx));
+        card.style.transform = `translateX(${offset}px)`;
+      }
+    }, { passive: false });
+
+    const finish = () => {
+      clearLong();
+      if (!down && mode !== 'swipe' && mode !== 'reorder') return;
+      const dx = lastX - startX;
+      const finalMode = mode;
+      down = false;
+      mode = null;
+      resetCard();
+
+      if (finalMode === 'swipe') {
+        if (dx < -72) completeExerciseGesture(exerciseId);
+        else if (dx > 72) toggleExerciseSettingsGesture(exerciseId);
+        return;
+      }
+      if (finalMode === 'reorder') {
+        if (targetIndex === null) targetIndex = indexForY(lastY);
+        reorderExerciseGesture(exerciseId, targetIndex);
+      }
+    };
+
+    card.addEventListener('pointerup', finish);
+    card.addEventListener('pointercancel', () => {
+      clearLong();
+      down = false;
+      mode = null;
+      resetCard();
+    });
+  });
 }
 
 function closeSwipeRows(except = null) {
@@ -2137,10 +2301,58 @@ function handleAction(el) {
 }
 
 // Recovery build: no service-worker registration.
+async function installUpdateFromErrorPage(file) {
+  const status = document.querySelector('[data-role="error-update-status"]');
+  const write = text => { if (status) status.textContent = text; };
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.zip')) {
+    write('Choose a zip.');
+    return;
+  }
+  write(`Installing ${file.name}…`);
+  try {
+    const res = await fetch('./api/install-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/zip', 'X-Filename': encodeURIComponent(file.name) },
+      body: file,
+      cache: 'no-store'
+    });
+    let data = {};
+    try { data = await res.json(); } catch {}
+    if (!res.ok || data.ok === false) throw new Error(data.error || `Update failed (${res.status}).`);
+    write('Installed. Restarting…');
+    setTimeout(() => window.location.replace(`${window.location.pathname}?t=${Date.now()}`), 2400);
+  } catch (err) {
+    write(`Update failed: ${err.message || err}`);
+  }
+}
+function bindErrorPageUpdater() {
+  const input = document.querySelector('[data-role="error-update-input"]');
+  const drop = document.querySelector('[data-role="error-update-drop"]');
+  if (!input || !drop || drop.dataset.bound) return;
+  drop.dataset.bound = '1';
+  input.addEventListener('change', ev => installUpdateFromErrorPage(ev.target.files && ev.target.files[0]));
+  drop.addEventListener('dragover', ev => { ev.preventDefault(); drop.classList.add('dragging'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('dragging'));
+  drop.addEventListener('drop', ev => {
+    ev.preventDefault();
+    drop.classList.remove('dragging');
+    installUpdateFromErrorPage(ev.dataTransfer?.files && ev.dataTransfer.files[0]);
+  });
+}
 function renderCrash(error) {
   const node = document.getElementById('app');
   const message = escapeHtml(error && (error.stack || error.message) ? (error.stack || error.message) : String(error || 'Unknown error'));
-  if (node) node.innerHTML = `<div class="app"><main class="main"><section class="hero"><h1 class="title">APP ERROR</h1><p class="note">${message}</p></section></main></div>`;
+  if (node) node.innerHTML = `<div class="app"><main class="main"><section class="hero error-hero">
+    <h1 class="title">APP ERROR</h1>
+    <p class="note">${message}</p>
+    <label class="error-update-drop" data-role="error-update-drop">
+      <input type="file" accept=".zip,application/zip" data-role="error-update-input">
+      <span>Upload update</span>
+    </label>
+    <p class="error-update-status" data-role="error-update-status"></p>
+  </section></main></div>`;
+  bindErrorPageUpdater();
   console.error(error);
 }
 try { render(); } catch (error) { renderCrash(error); }

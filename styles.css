@@ -1624,3 +1624,111 @@ select {
   84% { opacity: .92; transform: translate(-50%, 0) scale(1); }
   100% { opacity: 0; transform: translate(-50%, 4px) scale(.98); }
 }
+
+
+/* p.37 hidden exercise gestures + safer row swipes */
+.stack > .card[data-exercise-id] {
+  touch-action: pan-y;
+  user-select: none;
+  transition: transform .16s ease, opacity .16s ease;
+}
+.stack > .card.card-swiping,
+.stack > .card.drag-reorder {
+  transition: none;
+}
+.stack > .card.drag-reorder {
+  z-index: 50;
+  box-shadow: 0 24px 70px rgba(0,0,0,.52);
+}
+.swipe-row {
+  touch-action: pan-y;
+}
+.card-actions.simple-actions {
+  display: none;
+}
+.settings-panel {
+  border-top: 1px solid var(--line);
+}
+
+
+/* p.38 row swipe close fixes */
+.swipe-row:not(.dragging) .swipe-track {
+  transition: transform .16s ease;
+}
+.swipe-row.open .swipe-track {
+  transform: translateX(-94px);
+}
+
+
+/* p.39 app-error updater */
+.error-hero .note {
+  max-height: 160px;
+  overflow: auto;
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-word;
+}
+.error-update-drop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 68px;
+  margin-top: 18px;
+  border: 1px dashed var(--line);
+  border-radius: 18px;
+  background: var(--cream);
+  color: #050505;
+  cursor: pointer;
+}
+.error-update-drop.dragging {
+  border-color: #050505;
+  transform: translateY(-1px);
+}
+.error-update-drop input {
+  display: none;
+}
+.error-update-drop span {
+  color: #050505;
+  font-size: 13px;
+  font-weight: 860;
+  letter-spacing: -.01em;
+}
+.error-update-status {
+  min-height: 18px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+
+/* p.40 month header cleaned */
+.clean-month-hero {
+  min-height: 136px;
+  display: flex;
+  align-items: center;
+}
+.title-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.title-button:active {
+  transform: translateY(1px);
+}
+.month-settings-button {
+  display: none !important;
+}
+
+
+/* p.41 remove Month hero box */
+.month-hero,
+.clean-month-hero {
+  display: none !important;
+}
